@@ -9,95 +9,109 @@ version: 2.1
 github_link: extension-dev-guide/extension_attributes/adding-attributes.md
 ---
 
-Third party developers cannot change {% glossarytooltip 786086f2-622b-4007-97fe-2c19e5283035 %}API{% endglossarytooltip %} Data interface in the Magento Core, so the one way to affect interfaces
-using configuration is to add {% glossarytooltip 55774db9-bf9d-40f3-83db-b10cc5ae3b68 %}extension{% endglossarytooltip %} attributes.
+# Details:
+
+Let's say you are a developer that is tasked with loading some additional product details from a Product Management System. This data doesn't fit into existing product attributes as stored and displayed in tabular form. You could modify the core code (a bad idea) or you could try to serialize the data to store it in attributes (extra work in storing and retrieving).
+
+Instead, Magento offers the use of extension attributes. Extension attributes don't affect existing API data structures. Rather, these are available in the `getExtensionAttributes()` method on classes that extend `\Magento\Framework\Model\AbstractExtensibleModel`. Extension attributes are specified in configuration XML (`extension_attributes.xml`), expressed through auto-generated interfaces and utilized in the modules that you write.
+
+### Potential Use Cases for Extension Attributes
+* Loading unique customer information from an ERP
+* Storing synchronization data for ERP integration or a custom fraud detection implementation
+
+### Things to understand:
+* You are responsible for loading data into the extension attributes. ([example](https://github.com/magento/magento2/blob/2.2-develop/app/code/Magento/Catalog/Model/Category/Link/SaveHandler.php))
+* You are responsible for persisting changes made to the extension attributes. ([example](https://github.com/magento/magento2/blob/2.2-develop/app/code/Magento/Catalog/Model/Category/Link/ReadHandler.php))
+
+The return types for extension attributes can be categorized into two groups: scalar and object. This article focuses on object return types as more implementation is required. 
+
+### Steps to utilize extension attributes\:
+1. Create `etc/extension_attributes.xml`:
+  1. Create an `extension_attributes` node for the class you want to extend.
+  2. Create a `attribute` child inside `extension_attributes` with the interface that will be returned and the camel-case name of the attribute. For scalar return types, set the type to be the scalar type to be returned (like `type="int"`). You can also append `[]` to denote an array (like `type="int[]"`).
+2. Build the interface (not needed for scalar return types).
+3. Build an implementation for the interface (don't forget to make the association in `di.xml`). This is not needed for scalar return types.
+4. Create plugins for all methods that load the entity from persistence. For a product entity, this would be:
+  * [`\Magento\Catalog\Api\ProductRepositoryInterface::get`](https://github.com/magento/magento2/blob/2.2-develop/app/code/Magento/Catalog/Api/ProductRepositoryInterface.php)
+  * [`\Magento\Catalog\Api\ProductRepositoryInterface::getList`](https://github.com/magento/magento2/blob/2.2-develop/app/code/Magento/Catalog/Api/ProductRepositoryInterface.php)
+
+
+# Tutorial:
 
 <div class="bs-callout bs-callout-info" id="other-component-types">
-  <p>We will demonstrate this on Product entity, Product Repository and {% glossarytooltip 377dc0a3-b8a7-4dfa-808e-2de37e4c0029 %}Web Api{% endglossarytooltip %} example. </p>
+  <p>This article demonstrates how to create an extension attribute with a product entity, product Repository and the {% glossarytooltip 377dc0a3-b8a7-4dfa-808e-2de37e4c0029 %}web API{% endglossarytooltip %} example. </p>
 </div>
 
+### Step 1: create the XML configuration
 
-In order to get product or list of products by Magento API you need to do API request to appropriate service (Product Repository in our case).
-In Response we got object with next structure:
+The configuration is stored in `etc/extension_attributes.xml` in your module.
 
-### Product response:
-
+**Scalar Configuration:**
 {% highlight xml %}
-<product>
-    <id>1</id>
-    <sku>some-sku</sku>
-    <custom_attributes><!-- Custom Attributes Data --></custom_attributes>
-    <extension_attributes><!-- Here should we add extension attributes data --></extension_attributes>
-</product>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Api/etc/extension_attributes.xsd">
+    <extension_attributes for="Magento\Catalog\Api\Data\ProductInterface">
+        <attribute code="integer_type" type="int" />
+        <attribute code="integer_array_type" type="int[]" />
+    </extension_attributes>
+</config>
 {% endhighlight %}
 
-### Product list response:
-
+**Object Configuration:**
 {% highlight xml %}
-<products>
-    <item>
-        <id>1</id>
-        <sku>some-sku</sku>
-        <custom_attributes><!-- Custom Attributes Data --></custom_attributes>
-        <extension_attributes><!-- Here should we add extension attributes data --></extension_attributes>
-    </item>
-    <item>
-        <id>2</id>
-        <sku>some-sku-2</sku>
-        <custom_attributes><!-- Custom Attributes Data --></custom_attributes>
-        <extension_attributes><!-- Here should we add extension attributes data --></extension_attributes>
-    </item>
-</products>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Api/etc/extension_attributes.xsd">
+    <extension_attributes for="Magento\Catalog\Api\Data\ProductInterface">
+        <attribute code="product_shipment_date" type="YourCompany\YourModule\Api\Data\CustomDataInterface" />
+    </extension_attributes>
+</config>
 {% endhighlight %}
 
-## Add plugin to product repository
+### Step 2: build the interface
 
-In order to add attributes, we need to use after plugin on Product Repository.
-Plugin should listen next methods: save, get, getList.
+``` php?start_inline=1
 
-We can add scalar and non-scalar extension attributes.
+namespace YourCompany\YourModule\Api\Data;
 
-<div class="bs-callout bs-callout-info" id="other-component-types">
-  <p>Scalar is simple attribute. </p>
-  <p>Non-scalar attribute can be represented by Data Object. </p>
-</div>
+class CustomDataInterface
+{
+  public function getProductShipmentDate(): \DateTime;
+  
+  public function setProductShipmentDate(\DateTime $date);
+}
 
-{% highlight php inline=true %}
+```
+
+### Step 3: build an implementation for the interface
+
+The implementation for the interface is where the data will be stored in memory while it is being utilized. The implementation can be as detailed as necessary, but often is simple getters and setters providing a public interface to hidden properties.
+
+### Step 4: create plugins to load the data
+
+You are responsible for the loading and persistence for data in the extension attributes. The first step is to add the extension attribute information to the product when the product is loaded. There are multiple places that entity data is loaded, so careful attention is necessary.
+
+**Example for ProductRepositoryInterface:**
+``` php?start_inline=1
 public function afterGet
 (
     \Magento\Catalog\Api\ProductRepositoryInterface $subject,
     \Magento\Catalog\Api\Data\ProductInterface $entity
 ) {
-    $ourCustomData = $this->customDataRepository->get($entity->getId());
-
-    $extensionAttributes = $entity->getExtensionAttributes(); /** get current extension attributes from entity **/
-    $extensionAttributes->setOurCustomData($ourCustomData);
+    try {
+        $shipmentDate = $this->productShipmentDateRepository->getByProductId($entity->getId);
+    } catch (NoSuchEntityException $ex) {
+        return $entity;
+    }
+    
+    $extensionAttributes = $entity->getExtensionAttributes() ?: $this->productExtensionFactory->create();
+    
+    $customExtensionAttribute = $this->productShipmentDateExtensionFactory->create();
+    $customExtensionAttribute->setProductShipmentDate($shipmentDate);
+    
+    $extensionAttributes->setProductShipmentDate($customExtensionAttribute);
     $entity->setExtensionAttributes($extensionAttributes);
-
+    
     return $entity;
 }
-{% endhighlight %}
-
-It is the easiest way to add custom attributes. Because we need to know if {% glossarytooltip a9027f5d-efab-4662-96aa-c2999b5ab259 %}entity{% endglossarytooltip %} already has extension attributes.
-Also we need to check whether we already has our {% glossarytooltip 45013f4a-21a9-4010-8166-e3bd52d56df3 %}extension attribute{% endglossarytooltip %}.
-
-AfterGetList is similar to afterGet.
-
-Likewise afterSave plugin should take data from entity and do some manipulations:
-
-{% highlight php inline=true %}
-public function afterSave
-(
-    \Magento\Catalog\Api\ProductRepositoryInterface $subject,
-    \Magento\Catalog\Api\Data\ProductInterface $entity
-) {
-    $extensionAttributes = $entity->getExtensionAttributes(); /** get current extension attributes from entity **/
-    $ourCustomData = $extensionAttributes->getOurCustomData();
-    $this->customDataRepository->save($ourCustomData);
-
-    return $entity;
-}
-{% endhighlight %}
+```
 
 But if some entity doesn't have implementation to fetch extension attributes, we will always retrieve `null` and each time when we fetch extension atrributes we need to check if they are `null` - need to create them. To avoid such code duplication, we need to create `afterGet` plugin for our entity with extension attributes.
 
@@ -157,24 +171,7 @@ And now need to bind our plugin to `ProductInterface`:
 
 ## Extension Attributes Configuration:
 
-For scalar attributes we can use next configuration:
-{% highlight xml %}
-<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Api/etc/extension_attributes.xsd">
-    <extension_attributes for="Magento\Catalog\Api\Data\ProductInterface">
-        <attribute code="first_custom_attribute" type="Magento\SomeModule\Api\Data\CustomDataInterface" />
-        <attribute code="second_custom_attribute" type="Magento\SomeModule\Api\Data\CustomDataInterface" />
-    </extension_attributes>
-</config>
-{% endhighlight %}
 
-For non-scalar attributes:
-{% highlight xml %}
-<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Api/etc/extension_attributes.xsd">
-    <extension_attributes for="Magento\Catalog\Api\Data\ProductInterface">
-        <attribute code="our_custom_data" type="Magento\SomeModule\Api\Data\CustomDataInterface[]" />
-    </extension_attributes>
-</config>
-{% endhighlight %}
 
 In first case we will get the next result:
 
@@ -206,3 +203,37 @@ In second one:
 {% endhighlight %}
 
 <a href="https://github.com/magento/magento2-samples/tree/master/sample-external-links">Sample module on github</a>
+
+In order to get product or list of products by Magento API you need to do API request to appropriate service (Product Repository in our case).
+
+In Response we got object with next structure:
+
+### Product response:
+
+{% highlight xml %}
+<product>
+    <id>1</id>
+    <sku>some-sku</sku>
+    <custom_attributes><!-- Custom Attributes Data --></custom_attributes>
+    <extension_attributes><!-- Here should we add extension attributes data --></extension_attributes>
+</product>
+{% endhighlight %}
+
+### Product list response:
+
+{% highlight xml %}
+<products>
+    <item>
+        <id>1</id>
+        <sku>some-sku</sku>
+        <custom_attributes><!-- Custom Attributes Data --></custom_attributes>
+        <extension_attributes><!-- Here should we add extension attributes data --></extension_attributes>
+    </item>
+    <item>
+        <id>2</id>
+        <sku>some-sku-2</sku>
+        <custom_attributes><!-- Custom Attributes Data --></custom_attributes>
+        <extension_attributes><!-- Here should we add extension attributes data --></extension_attributes>
+    </item>
+</products>
+{% endhighlight %}
